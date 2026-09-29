@@ -4,10 +4,11 @@
 
 Minimal example: a **Backblaze B2 event notification** (a real webhook, fired on every object
 upload) reaches an edge function that does two things **directly, right there**: posts a
-message to a **Discord channel**, and triggers a **GitHub Actions workflow** that opens an
-Issue. Built for a live 30-minute webinar demo; optimized for speed to set up, not production
-hardening. Deployable to either **Cloudflare Workers** or **Vercel Edge Functions** — same
-logic, pick whichever platform you already have an account on.
+message to a **Discord channel** — with an inline **image thumbnail** when the upload is a
+picture — and triggers a **GitHub Actions workflow** that opens an Issue. Built for a live
+30-minute webinar demo; optimized for speed to set up, not production hardening. Deployable to
+either **Cloudflare Workers** or **Vercel Edge Functions** — same logic, pick whichever platform
+you already have an account on.
 
 ```
 B2 bucket upload
@@ -16,9 +17,12 @@ B2 bucket upload
 B2 event notification (real webhook, B2's fixed JSON shape)
       │
       ▼
-edge function  ──┬──► posts a message to Discord           (done, right there)
- (relay/relay.js  │
-  or api/relay.js)└──► triggers repository_dispatch ──► .github/workflows/b2-event.yml
+edge function  ──┬──► posts a message to Discord, with an inline image     (done, right there)
+ (relay/relay.js  │    thumbnail via a presigned GetObject URL (B2 read-only
+  or api/relay.js)│    key, bytes fetched by Discord directly — never through
+                  │    this function)
+                  │
+                  └──► triggers repository_dispatch ──► .github/workflows/b2-event.yml
                                                                     │
                                                                     ▼
                                                           opens a GitHub Issue
@@ -33,16 +37,30 @@ can't template the body or set a bearer token as a header value — so something
 between B2 and GitHub to reshape the payload and add that header. The same function does the
 Discord post directly, since Discord's webhook needs no such translation — just a normal POST.
 
-## The three secrets — what each one actually is
+## The secrets — what each one actually is
 
-Three names get referenced below. Here's exactly what each one is and where it comes from —
-none of them are things this repo already has; you create or fetch all three yourself.
+Names get referenced below. Here's exactly what each one is and where it comes from — none of
+them are things this repo already has; you create or fetch each one yourself.
 
 | Secret | What it is | Where the value comes from |
 |---|---|---|
 | `GITHUB_REPO` | Not a secret at all — just this repo's name, as a literal string | `backblaze-labs/b2-mcp-webinar` — copy it as-is, no account or dashboard involved |
 | `GITHUB_TOKEN` | A **Personal Access Token** *you* create, so the edge function is allowed to call GitHub's API (`repository_dispatch`) on your behalf | See **Getting `GITHUB_TOKEN`** below — read it before generating one, there are two token types and only one of them reliably works against an org repo without extra approval steps |
 | `DISCORD_WEBHOOK_URL` | A URL Discord generates for one specific channel; anything POSTed to it appears as a message in that channel | In the target Discord server: pick the channel → gear icon (**Edit Channel**) → **Integrations** → **Webhooks** → **New Webhook** → name it (e.g. "B2 Demo") → **Copy Webhook URL** |
+
+The four below power the **image thumbnail** feature and are optional — omit them and the
+relay still posts the plain-text Discord message and still triggers the GitHub workflow, just
+without an inline image preview.
+
+| Secret | What it is | Where the value comes from |
+|---|---|---|
+| `B2_APPLICATION_KEY_ID` / `B2_APPLICATION_KEY` | A **read-only** B2 application key, scoped to only the demo bucket, so the relay can mint a presigned GetObject URL for an uploaded image — never given write or delete capability | Mint one via the B2 MCP server's `b2_create_key` tool (capabilities `listFiles` + `readFiles`, `bucketIds` scoped to the demo bucket) or the B2 web console → App Keys → Add a New Application Key |
+| `B2_S3_ENDPOINT` | The S3-compatible hostname for your account's region | From any presigned URL your account has already generated, e.g. `s3.us-east-005.backblazeb2.com`, or the B2 console → Buckets → your bucket → Endpoint |
+| `B2_REGION` | The region code embedded in that same hostname | The middle segment, e.g. `us-east-005` |
+
+The presign step never sends the key's secret to Discord or GitHub — it only uses it locally,
+inside the edge function, to compute an AWS SigV4 signature. Discord fetches the image bytes
+directly from B2 using the resulting URL; they never pass through the relay itself.
 
 None of these three are things that can be created on your behalf — the PAT needs your GitHub
 login, the webhook needs your ownership of the Discord server. Once you have all three values in
@@ -81,12 +99,21 @@ webhook target for B2 (last step below). **First-time accounts:** if deploy warn
 register a workers.dev subdomain," do that once at the printed dashboard link before continuing
 — see **Troubleshooting** for what happens if you skip or change it later.
 
-Then set the three secrets:
+Then set the required secrets:
 
 ```bash
 npx wrangler secret put DISCORD_WEBHOOK_URL
 npx wrangler secret put GITHUB_TOKEN
 npx wrangler secret put GITHUB_REPO
+```
+
+And, optionally, the four that enable the image thumbnail:
+
+```bash
+npx wrangler secret put B2_APPLICATION_KEY_ID
+npx wrangler secret put B2_APPLICATION_KEY
+npx wrangler secret put B2_S3_ENDPOINT
+npx wrangler secret put B2_REGION
 ```
 
 Each command prompts you to paste the corresponding value — see the tables above for exactly
@@ -102,15 +129,19 @@ npx vercel deploy --prod
 ```
 
 Deploy prints your project's URL; the function is reachable at `<url>/api/relay`. Set the same
-three env vars via the CLI or the Vercel dashboard (Project Settings → Environment Variables):
+env vars via the CLI or the Vercel dashboard (Project Settings → Environment Variables):
 
 ```bash
 npx vercel env add DISCORD_WEBHOOK_URL production
 npx vercel env add GITHUB_TOKEN production
 npx vercel env add GITHUB_REPO production
+npx vercel env add B2_APPLICATION_KEY_ID production    # optional, enables the thumbnail
+npx vercel env add B2_APPLICATION_KEY production       # optional
+npx vercel env add B2_S3_ENDPOINT production            # optional
+npx vercel env add B2_REGION production                 # optional
 ```
 
-Same three values as the tables above.
+Same values as the tables above.
 
 Uses [`api/relay.js`](api/relay.js) — Vercel auto-detects any file under `api/` as a serverless
 function, no extra config needed.
@@ -120,9 +151,10 @@ function, no extra config needed.
 1. **Point the B2 bucket's event notification at whichever URL you deployed** (see the B2 MCP
    server's `b2_set_bucket_notification_rules` tool, or the B2 web console → bucket → Event
    Notifications). Use event type `b2:ObjectCreated:*`.
-2. **Upload a file to the bucket.** Within a few seconds: a message lands in Discord, and a new
-   Issue appears on this repo — both fired from the same edge function call, itself fired by a
-   real B2 webhook.
+2. **Upload a file to the bucket.** Within a few seconds: a message lands in Discord (with an
+   inline image preview if the file is a picture and the four `B2_*` secrets are set), and a
+   new Issue appears on this repo — both fired from the same edge function call, itself fired
+   by a real B2 webhook.
 
 ## Manual test (no B2, no deploy required)
 
@@ -148,6 +180,10 @@ curl -X POST "https://<worker-or-vercel-url>/" \
   -H "Content-Type: application/json" \
   -d '{"events":[{"eventType":"b2:ObjectCreated:Upload","eventData":{"bucketName":"webinar-demo-media-0928","objectName":"test.txt"}}]}'
 ```
+
+Use a real, already-uploaded image key (e.g. `image-1.webp`) as `objectName` to exercise the
+thumbnail path specifically — the relay only attempts a presign for keys ending in a recognized
+image extension (`jpg`, `jpeg`, `png`, `gif`, `webp`, `bmp`, `svg`).
 
 A `200` means both Discord and GitHub succeeded. A `207` means one of the two failed — the
 response body names which one and why (the Worker/function surfaces the real upstream error
@@ -196,7 +232,7 @@ Real problems encountered wiring this up, in the order they tend to bite:
 
 | Path | Purpose |
 |---|---|
-| `relay/relay.js` | Cloudflare Worker: posts to Discord + triggers the GitHub workflow. |
+| `relay/relay.js` | Cloudflare Worker: posts to Discord (with an image thumbnail via a self-contained AWS SigV4 presign, Web Crypto only, no SDK) + triggers the GitHub workflow. |
 | `wrangler.toml` | Cloudflare Worker deploy config. |
 | `api/relay.js` | Vercel Edge Function port of the exact same logic. |
 | `.github/workflows/b2-event.yml` | Reacts to the trigger by opening a GitHub Issue. |
