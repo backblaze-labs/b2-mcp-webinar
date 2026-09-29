@@ -1,24 +1,11 @@
 # B2 MCP Webinar — Event Notification Demo
 
-Minimal example: a **Backblaze B2 event notification** (fired on every object upload) triggers
-a **GitHub Actions workflow** that does everything — opens an Issue and posts to a **Discord
-channel**. Built for a live 30-minute webinar demo; optimized for speed to set up, not
-production hardening.
-
-## The one hard constraint
-
-GitHub Actions has exactly one trigger surface for a system outside GitHub:
-`repository_dispatch`. It requires a POST with an `Authorization: Bearer <token>` header and a
-fixed body shape — `{ event_type, client_payload }`. B2 sends its own fixed JSON event shape
-and can't template the body or set a bearer token as a header value, so **something has to
-translate one shape into the other.** [`relay/relay.js`](relay/relay.js) is that translator —
-nothing more. It does not talk to Discord and does not decide what happens next; it only
-reshapes the payload and adds the auth header GitHub requires. It runs as a **Cloudflare
-Worker** (fastest real deploy for this: one CLI command, no project scaffolding).
-
-Everything the demo actually **does** — opening an Issue, posting to Discord — lives in one
-place: [`.github/workflows/b2-event.yml`](.github/workflows/b2-event.yml). One real B2 webhook,
-one workflow, does all of it.
+Minimal example: a **Backblaze B2 event notification** (a real webhook, fired on every object
+upload) reaches an edge function that does two things **directly, right there**: posts a
+message to a **Discord channel**, and triggers a **GitHub Actions workflow** that opens an
+Issue. Built for a live 30-minute webinar demo; optimized for speed to set up, not production
+hardening. Deployable to either **Cloudflare Workers** or **Vercel Edge Functions** — same
+logic, pick whichever platform you already have an account on.
 
 ```
 B2 bucket upload
@@ -27,50 +14,71 @@ B2 bucket upload
 B2 event notification (real webhook, B2's fixed JSON shape)
       │
       ▼
-relay/relay.js (Cloudflare Worker) ── translates + adds GitHub auth header ──► repository_dispatch
-                                                                                      │
-                                                                                      ▼
-                                                                  .github/workflows/b2-event.yml
-                                                                        ├──► opens a GitHub Issue
-                                                                        └──► posts a message to Discord
+edge function  ──┬──► posts a message to Discord           (done, right there)
+ (relay/relay.js  │
+  or api/relay.js)└──► triggers repository_dispatch ──► .github/workflows/b2-event.yml
+                                                                    │
+                                                                    ▼
+                                                          opens a GitHub Issue
 ```
 
-## Setup (fast path)
+## Why an edge function sits in the middle at all
 
-1. **Add one repo secret** for Discord: Settings → Secrets and variables → Actions →
-   `DISCORD_WEBHOOK_URL` (Discord: channel → Settings → Integrations → Webhooks → New Webhook →
-   Copy URL). That's the only Discord-specific config — the workflow handles the rest.
+GitHub Actions has exactly one trigger surface for a system outside GitHub:
+`repository_dispatch`. It requires a POST with an `Authorization: Bearer <token>` header and a
+fixed body shape — `{ event_type, client_payload }`. B2 sends its own fixed JSON event shape and
+can't template the body or set a bearer token as a header value — so something has to sit
+between B2 and GitHub to reshape the payload and add that header. The same function does the
+Discord post directly, since Discord's webhook needs no such translation — just a normal POST.
 
-2. **Deploy the relay to Cloudflare Workers** (no wrangler install needed, `npx` runs it):
-   ```bash
-   npx wrangler deploy
-   ```
-   First run prompts a browser login to your Cloudflare account (free tier is enough). Deploy
-   prints a URL like `https://b2-mcp-webinar-relay.<your-subdomain>.workers.dev` — that's the
-   webhook target for step 4.
+## Setup — Cloudflare Workers (fastest: one CLI command)
 
-3. **Set the Worker's two secrets** (separate from the repo secret above — the relay only needs
-   to reach the GitHub dispatch API, never Discord):
-   ```bash
-   npx wrangler secret put GITHUB_TOKEN
-   npx wrangler secret put GITHUB_REPO
-   ```
-   - `GITHUB_TOKEN` — paste a fine-grained PAT scoped to **this repo only**, with
-     **contents: read** and **repository_dispatch** permission (a classic PAT with `repo` scope
-     also works).
-   - `GITHUB_REPO` — paste `backblaze-labs/b2-mcp-webinar`.
+```bash
+npx wrangler deploy
+```
 
-4. **Point the B2 bucket's event notification at the Worker's URL** (see the B2 MCP server's
-   `b2_set_bucket_notification_rules` tool, or the B2 web console → bucket → Event
+First run prompts a browser login to your Cloudflare account (free tier is enough). Deploy
+prints a URL like `https://b2-mcp-webinar-relay.<your-subdomain>.workers.dev` — that's the
+webhook target for B2 (last step below). Then set the three secrets:
+
+```bash
+npx wrangler secret put DISCORD_WEBHOOK_URL   # Discord: channel > Settings > Integrations > Webhooks > New Webhook > Copy URL
+npx wrangler secret put GITHUB_TOKEN          # fine-grained PAT, this repo only, repository_dispatch permission
+npx wrangler secret put GITHUB_REPO           # value: backblaze-labs/b2-mcp-webinar
+```
+
+Uses [`relay/relay.js`](relay/relay.js) + [`wrangler.toml`](wrangler.toml).
+
+## Setup — Vercel Edge Functions (alternative, same logic)
+
+```bash
+npx vercel deploy --prod
+```
+
+Deploy prints your project's URL; the function is reachable at `<url>/api/relay`. Set the same
+three env vars via the CLI or the Vercel dashboard (Project Settings → Environment Variables):
+
+```bash
+npx vercel env add DISCORD_WEBHOOK_URL production
+npx vercel env add GITHUB_TOKEN production
+npx vercel env add GITHUB_REPO production
+```
+
+Uses [`api/relay.js`](api/relay.js) — Vercel auto-detects any file under `api/` as a serverless
+function, no extra config needed.
+
+## Either way, finish with:
+
+1. **Point the B2 bucket's event notification at whichever URL you deployed** (see the B2 MCP
+   server's `b2_set_bucket_notification_rules` tool, or the B2 web console → bucket → Event
    Notifications). Use event type `b2:ObjectCreated:*`.
+2. **Upload a file to the bucket.** Within a few seconds: a message lands in Discord, and a new
+   Issue appears on this repo — both fired from the same edge function call, itself fired by a
+   real B2 webhook.
 
-5. **Upload a file to the bucket.** Within a few seconds: a new Issue appears on this repo, and
-   a message lands in Discord — both fired from the same workflow run, itself fired by a real
-   B2 webhook hitting the Worker.
+## Manual test (no B2, no deploy required)
 
-## Manual test (no B2, no Worker deploy required)
-
-Skip the whole pipeline and fire the real trigger directly:
+Skip the whole pipeline and fire the GitHub side directly:
 
 ```bash
 gh api repos/backblaze-labs/b2-mcp-webinar/dispatches \
@@ -79,31 +87,22 @@ gh api repos/backblaze-labs/b2-mcp-webinar/dispatches \
   -f 'client_payload[bucketName]=webinar-demo-media-0928'
 ```
 
-That's exactly what the relay sends — good for rehearsing the whole workflow live without
-waiting on a real upload or standing up the Worker first.
-
-## Why Cloudflare Workers (and not Vercel)
-
-Both work; Workers is faster to stand up for a single-function relay with no framework —
-`npx wrangler deploy` from a single `.js` file and a four-line `wrangler.toml`, versus Vercel's
-project-shaped deploy (an `api/` function plus a `vercel deploy`, roughly the same result with
-more scaffolding). If you already have a Vercel project you'd rather reuse, `relay/relay.js`'s
-logic ports directly into an Edge Function — swap the `export default { fetch(request, env) }`
-Worker shape for `export default async function handler(request)` and read
-`process.env.GITHUB_TOKEN` / `process.env.GITHUB_REPO` instead of `env.*`.
+That triggers [`.github/workflows/b2-event.yml`](.github/workflows/b2-event.yml) directly —
+good for rehearsing the GitHub half live without deploying anything first.
 
 ## Files
 
 | Path | Purpose |
 |---|---|
-| `relay/relay.js` | Cloudflare Worker: translates B2's webhook into a GitHub `repository_dispatch` call. Nothing else. |
+| `relay/relay.js` | Cloudflare Worker: posts to Discord + triggers the GitHub workflow. |
 | `wrangler.toml` | Cloudflare Worker deploy config. |
-| `.github/workflows/b2-event.yml` | The one workflow that does everything: opens an Issue, posts to Discord. |
+| `api/relay.js` | Vercel Edge Function port of the exact same logic. |
+| `.github/workflows/b2-event.yml` | Reacts to the trigger by opening a GitHub Issue. |
 | `README.md` | This file |
 
 ## Not covered here
 
 Production concerns — retries, dead-lettering, webhook signature verification (B2 supports an
-HMAC-SHA256 signing secret on the notification rule; the Worker should verify it before
-trusting the payload), and Worker observability — are intentionally out of scope for a
-15-minute demo repo.
+HMAC-SHA256 signing secret on the notification rule; the edge function should verify it before
+trusting the payload), and secret rotation — are intentionally out of scope for a 15-minute
+demo repo.

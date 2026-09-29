@@ -1,10 +1,8 @@
 name: B2 event received
 
-# Triggered externally via the GitHub "repository_dispatch" API — the only inbound trigger
-# surface GitHub Actions exposes to a system outside GitHub. See relay/relay.js: it is the
-# minimal bridge that translates B2's webhook payload into this call, because B2 cannot POST
-# the required { event_type, client_payload } shape (or an Authorization header token)
-# directly. Everything the demo actually DOES lives in this one workflow, not the relay.
+# Triggered by the relay (relay/relay.js or api/relay.js) via GitHub's `repository_dispatch`
+# API — the only inbound trigger surface GitHub Actions exposes to a system outside GitHub.
+# The relay also posts directly to Discord; this workflow is the GitHub-side reaction.
 on:
   repository_dispatch:
     types: [b2_object_created]
@@ -13,17 +11,16 @@ permissions:
   issues: write
 
 jobs:
-  handle-b2-event:
-    name: React to the B2 upload
+  open-issue:
+    name: Open an issue for the upload
     runs-on: ubuntu-latest
-    env:
-      BUCKET: ${{ github.event.client_payload.bucketName }}
-      OBJECT: ${{ github.event.client_payload.objectName }}
-      EVENT_TYPE: ${{ github.event.client_payload.eventType }}
     steps:
-      - name: Open an issue for the upload
+      - name: Create issue from the relayed B2 event
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUCKET: ${{ github.event.client_payload.bucketName }}
+          OBJECT: ${{ github.event.client_payload.objectName }}
+          EVENT_TYPE: ${{ github.event.client_payload.eventType }}
         run: |
           gh issue create \
             --repo "${{ github.repository }}" \
@@ -32,14 +29,4 @@ jobs:
           **Bucket:** ${BUCKET}
           **Object:** ${OBJECT}
 
-          Opened automatically by [.github/workflows/b2-event.yml](../blob/main/.github/workflows/b2-event.yml) in response to a relayed B2 event notification. See [relay/relay.js](../blob/main/relay/relay.js) for the minimal translator that forwarded this event from B2."
-
-      - name: Post a message to Discord
-        if: ${{ env.DISCORD_WEBHOOK_URL != '' }}
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: |
-          curl -sS -X POST "${DISCORD_WEBHOOK_URL}" \
-            -H "Content-Type: application/json" \
-            -d "$(jq -n --arg bucket "$BUCKET" --arg object "$OBJECT" --arg type "$EVENT_TYPE" \
-                  '{content: ("📦 **B2 event** `" + $type + "`\nBucket: `" + $bucket + "`\nObject: `" + $object + "`")}')"
+          Opened automatically in response to a B2 event notification relayed through [relay/relay.js](../blob/main/relay/relay.js) (Cloudflare Worker) or [api/relay.js](../blob/main/api/relay.js) (Vercel Edge Function). The same relay call also posted this event to Discord."
