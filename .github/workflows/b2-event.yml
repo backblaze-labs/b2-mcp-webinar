@@ -1,0 +1,28 @@
+name: B2 event received
+
+on:
+  repository_dispatch:
+    types: [b2_object_created]
+
+permissions:
+  issues: write
+
+jobs:
+  open-issue:
+    name: Open an issue for the upload
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create issue from the relayed B2 event
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUCKET: ${{ github.event.client_payload.bucketName }}
+          OBJECT: ${{ github.event.client_payload.objectName }}
+          EVENT_TYPE: ${{ github.event.client_payload.eventType }}
+        run: |
+          gh issue create \
+            --title "New object: ${OBJECT} (${BUCKET})" \
+            --body "**Event:** ${EVENT_TYPE}
+          **Bucket:** ${BUCKET}
+          **Object:** ${OBJECT}
+
+          Opened automatically by [.github/workflows/b2-event.yml](../blob/main/.github/workflows/b2-event.yml) in response to a relayed B2 event notification. See [relay/relay.js](../blob/main/relay/relay.js) for the relay that forwarded this event from B2."
