@@ -1,0 +1,8 @@
+# Cloudflare Worker config for the B2 -> GitHub webhook translator.
+# Deploy from the repo root: `npx wrangler deploy`
+# One-time secrets (never commit these): `npx wrangler secret put GITHUB_TOKEN`
+#                                         `npx wrangler secret put GITHUB_REPO`
+
+name = "b2-mcp-webinar-relay"
+main = "relay/relay.js"
+compatibility_date = "2026-09-01"
