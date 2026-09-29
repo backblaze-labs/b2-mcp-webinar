@@ -49,8 +49,9 @@ export default {
 
     const failures = [discordResult, dispatchResult].filter((r) => r.status === "rejected");
     if (failures.length > 0) {
-      console.error("relay: partial failure", failures.map((f) => f.reason));
-      return new Response(`ok, with ${failures.length} downstream failure(s) (see logs)`, {
+      const reasons = failures.map((f) => String(f.reason?.message ?? f.reason));
+      console.error("relay: partial failure", reasons);
+      return new Response(`ok, with ${failures.length} downstream failure(s): ${reasons.join("; ")}`, {
         status: 207,
       });
     }
@@ -90,5 +91,8 @@ async function triggerWorkflow(env, { eventType, bucketName, objectName }) {
       client_payload: { eventType, bucketName, objectName },
     }),
   });
-  if (!res.ok) throw new Error(`GitHub dispatch failed: ${res.status}`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`GitHub dispatch failed: ${res.status} ${body}`.trim());
+  }
 }

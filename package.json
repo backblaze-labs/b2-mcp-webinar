@@ -1,0 +1,20 @@
+{
+  "name": "b2-mcp-webinar",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal B2 event-notification demo: an edge function posts to Discord and triggers a GitHub Actions workflow.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/backblaze-labs/b2-mcp-webinar.git"
+  },
+  "scripts": {
+    "deploy:cloudflare": "wrangler deploy",
+    "secrets:cloudflare": "wrangler secret put DISCORD_WEBHOOK_URL && wrangler secret put GITHUB_TOKEN && wrangler secret put GITHUB_REPO",
+    "deploy:vercel": "vercel deploy --prod",
+    "dispatch:test": "gh api repos/backblaze-labs/b2-mcp-webinar/dispatches -f event_type='b2_object_created' -f 'client_payload[objectName]=demo/hello.txt' -f 'client_payload[bucketName]=webinar-demo-media-0928'"
+  },
+  "devDependencies": {
+    "wrangler": "^4.143.0"
+  }
+}
