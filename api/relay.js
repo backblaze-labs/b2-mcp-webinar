@@ -21,8 +21,9 @@
 //   npx vercel env add B2_S3_ENDPOINT          (e.g. "s3.us-east-005.backblazeb2.com")
 //   npx vercel env add B2_REGION               (e.g. "us-east-005")
 //
-// B2's webhook body shape (subset used here):
-//   { events: [ { eventType, eventData: { bucketName, objectName, ... } } ] }
+// B2's webhook body shape (subset used here — fields are flat on each event object, verified
+// against a live B2-fired webhook, not merely inferred from docs):
+//   { events: [ { eventType, bucketName, objectName, objectSize, objectVersionId, ... } ] }
 // See: https://www.backblaze.com/apidocs/b2-event-notification-rules
 
 export const config = { runtime: "edge" };
@@ -44,11 +45,14 @@ export default async function handler(request) {
   // TODO before production use: verify the HMAC-SHA256 signature B2 sends when a signing
   // secret is configured on the notification rule, before trusting this payload.
 
+  // B2's real event-notification payload is flat on each event object — bucketName,
+  // objectName, and eventType are top-level fields, NOT nested under an eventData wrapper.
+  // Confirmed against a live B2-fired webhook; do not reintroduce a nested-field guess here.
   const event = body.events?.[0];
   const info = {
     eventType: event?.eventType ?? "unknown",
-    bucketName: event?.eventData?.bucketName ?? event?.bucketName ?? "unknown-bucket",
-    objectName: event?.eventData?.objectName ?? event?.fileName ?? "unknown-object",
+    bucketName: event?.bucketName ?? "unknown-bucket",
+    objectName: event?.objectName ?? "unknown-object",
   };
 
   const [discordResult, dispatchResult] = await Promise.allSettled([

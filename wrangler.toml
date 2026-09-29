@@ -6,3 +6,10 @@
 name = "b2-mcp-webinar-relay"
 main = "relay/relay.js"
 compatibility_date = "2026-09-01"
+
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = false
+invocation_logs = true

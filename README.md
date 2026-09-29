@@ -178,8 +178,13 @@ Once deployed, fire a synthetic B2-shaped event straight at it (no real B2 uploa
 ```bash
 curl -X POST "https://<worker-or-vercel-url>/" \
   -H "Content-Type: application/json" \
-  -d '{"events":[{"eventType":"b2:ObjectCreated:Upload","eventData":{"bucketName":"webinar-demo-media-0928","objectName":"test.txt"}}]}'
+  -d '{"events":[{"eventType":"b2:ObjectCreated:Upload","bucketName":"webinar-demo-media-0928","objectName":"test.txt"}]}'
 ```
+
+This is B2's real payload shape — `bucketName` and `objectName` are flat fields on each event
+object, not nested under an `eventData` wrapper. (An earlier version of this repo guessed a
+nested shape that matched neither B2's real webhook nor any documented example; every field
+name here was confirmed against a live, B2-fired webhook.)
 
 Use a real, already-uploaded image key (e.g. `image-1.webp`) as `objectName` to exercise the
 thumbnail path specifically — the relay only attempts a presign for keys ending in a recognized
@@ -227,6 +232,37 @@ Real problems encountered wiring this up, in the order they tend to bite:
   Fire the manual test dispatch (above) using your *own* `gh` auth. If that opens an Issue but
   the edge function's own calls still fail, the workflow and its trigger config are proven fine
   — the problem is isolated to the edge function's `GITHUB_TOKEN` secret specifically.
+
+- **Don't hand-craft the real B2 payload shape from memory or a doc guess — a synthetic test
+  payload can silently diverge from what B2 actually sends.** An earlier version of this repo's
+  code (and its own `curl` test examples) assumed field names lived under a nested `eventData`
+  object. Every synthetic test using that shape "passed" because it matched the code's own
+  wrong assumption — but a real B2-fired webhook produced `unknown-object` every time, because
+  B2's real payload has `bucketName` / `objectName` / `eventType` as **flat, top-level fields**
+  on each event object (see the shape documented at the top of `relay/relay.js`). If a
+  synthetic curl test passes but a real upload doesn't produce the expected downstream fields,
+  suspect exactly this: capture the actual payload (temporarily log or echo it — the `console.log`
+  at the top of the fetch handler plus `wrangler tail`, or a Cloudflare Workers Logs query with
+  `observability` enabled below, are both real options) before trusting any hand-written test
+  payload again.
+
+## Observability (Cloudflare Workers)
+
+`wrangler.toml` enables invocation logging:
+
+```toml
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = false
+invocation_logs = true
+```
+
+This surfaces the Worker's `console.log`/`console.error` calls (including the raw incoming B2
+payload logged on every request) in the Cloudflare dashboard under **Workers & Pages → your
+Worker → Logs**, without needing a live `wrangler tail` session — useful given `wrangler tail`'s
+websocket has been observed to intermittently fail to connect in this environment.
 
 ## Files
 
