@@ -31,6 +31,22 @@ can't template the body or set a bearer token as a header value — so something
 between B2 and GitHub to reshape the payload and add that header. The same function does the
 Discord post directly, since Discord's webhook needs no such translation — just a normal POST.
 
+## The three secrets — what each one actually is
+
+Three names get referenced below. Here's exactly what each one is and where it comes from —
+none of them are things this repo already has; you create or fetch all three yourself.
+
+| Secret | What it is | Where the value comes from |
+|---|---|---|
+| `GITHUB_REPO` | Not a secret at all — just this repo's name, as a literal string | `backblaze-labs/b2-mcp-webinar` — copy it as-is, no account or dashboard involved |
+| `GITHUB_TOKEN` | A **fine-grained Personal Access Token** *you* create, scoped to only this repo, so the edge function is allowed to call GitHub's API (`repository_dispatch`) on your behalf | 1. Go to **[github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new)** 2. **Resource owner**: `backblaze-labs` 3. **Repository access** → *Only select repositories* → `b2-mcp-webinar` 4. **Permissions** → *Repository permissions* → **Contents: Read and write** 5. Generate, copy the token (starts `github_pat_…`) — GitHub shows it exactly once |
+| `DISCORD_WEBHOOK_URL` | A URL Discord generates for one specific channel; anything POSTed to it appears as a message in that channel | In the Python Colombia Discord server: pick the target channel → gear icon (**Edit Channel**) → **Integrations** → **Webhooks** → **New Webhook** → name it (e.g. "B2 Demo") → **Copy Webhook URL** |
+
+None of these three are things I can create for you — the PAT needs your GitHub login, the
+webhook needs your ownership of the Discord server. Once you have all three values in hand, the
+setup below is just pasting them in when each CLI prompts for them (`wrangler secret put` /
+`vercel env add` never echo the value back, so it's safe to paste a real secret there).
+
 ## Setup — Cloudflare Workers (fastest: one CLI command)
 
 ```bash
@@ -42,10 +58,13 @@ prints a URL like `https://b2-mcp-webinar-relay.<your-subdomain>.workers.dev` �
 webhook target for B2 (last step below). Then set the three secrets:
 
 ```bash
-npx wrangler secret put DISCORD_WEBHOOK_URL   # Discord: channel > Settings > Integrations > Webhooks > New Webhook > Copy URL
-npx wrangler secret put GITHUB_TOKEN          # fine-grained PAT, this repo only, repository_dispatch permission
-npx wrangler secret put GITHUB_REPO           # value: backblaze-labs/b2-mcp-webinar
+npx wrangler secret put DISCORD_WEBHOOK_URL
+npx wrangler secret put GITHUB_TOKEN
+npx wrangler secret put GITHUB_REPO
 ```
+
+Each command prompts you to paste the corresponding value — see the table above for exactly
+what each one is and how to get it. `GITHUB_REPO`'s value is just `backblaze-labs/b2-mcp-webinar`.
 
 Uses [`relay/relay.js`](relay/relay.js) + [`wrangler.toml`](wrangler.toml).
 
@@ -63,6 +82,8 @@ npx vercel env add DISCORD_WEBHOOK_URL production
 npx vercel env add GITHUB_TOKEN production
 npx vercel env add GITHUB_REPO production
 ```
+
+Same three values as the table above.
 
 Uses [`api/relay.js`](api/relay.js) — Vercel auto-detects any file under `api/` as a serverless
 function, no extra config needed.
